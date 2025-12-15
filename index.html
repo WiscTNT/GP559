@@ -8,6 +8,32 @@
     <div id="ui-overlay">
         <label><input type="checkbox" id="modeToggle"> Full Mode (Textures)</label>
     </div>
+
+    <div id="start-screen" class="overlay">
+        <h1>Robot Run</h1>
+
+        <!-- Scores -->
+        <div class="score-display">
+            <div id="last-run-score">Last Run: 0</div>
+            <div id="high-score">High Score: 0</div>
+        </div>
+
+        <div id="player-preview"></div>
+
+        <div class="controls">
+            <button id="play-button" class="action-button">Start Game</button>
+
+            <div class="difficulty-group">
+                <span>Difficulty</span>
+                <div class="difficulty-buttons">
+                    <button class="difficulty-btn" data-difficulty="easy">Easy</button>
+                    <button class="difficulty-btn active" data-difficulty="medium">Medium</button>
+                    <button class="difficulty-btn" data-difficulty="hard">Hard</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script type="importmap">
         { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
     </script>

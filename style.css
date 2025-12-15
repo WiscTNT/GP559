@@ -1,0 +1,154 @@
+body { margin: 0; overflow: hidden; }
+
+/* Styles for the main game overlay (mode toggle, etc.) */
+#ui-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    padding: 10px;
+    color: white;
+    z-index: 10; /* Keep it on top */
+}
+
+/* ------------------------------------------- */
+/* NEW START SCREEN STYLES */
+/* ------------------------------------------- */
+
+/* Full screen opaque overlay */
+.overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.4); 
+    display: flex;
+    justify-content: flex-start; /* Change from center to flex-start */
+    align-items: flex-start;
+    z-index: 20;
+    color: white;
+    font-family: sans-serif;
+    transition: opacity 0.5s ease-out;
+    padding: 40px; /* optional: add some padding from the top and left */
+}
+
+#start-screen {
+    padding-left: 80px;
+}
+
+#start-screen h1 {
+    font-size: 3em;
+    margin-bottom: 30px;
+    color: #4CAF50; /* A nice green color */
+    /* MODIFIED: Removed the 'text-align: left;' rule as the element is already left-aligned 
+       by the padding on #start-screen and its parent flex container.
+       However, to ensure it doesn't get centered by other rules, we can keep it 
+       or rely on the parent's alignment. If the title is still not far left enough, 
+       you might want to adjust the `justify-content` and `align-items` on `.overlay` 
+       or remove the `padding-left` from `#start-screen`.
+    */
+    text-align: left; /* Kept for explicit alignment, though often the default. */
+}
+
+.score-display {
+    position: absolute;
+    left: 80px;        /* same as title & controls */
+    top: 150px;        /* adjust this to fine-tune vertical placement */
+    font-size: 1.2em;
+    opacity: 0.9;
+}
+
+
+.score-display div {
+    margin: 60px 0;
+}
+
+#high-score {
+    color: #4CAF50;
+    font-weight: bold;
+}
+
+.controls {
+    position: absolute;
+    left: 80px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    width: 260px;
+}
+
+.action-button {
+    padding: 15px 30px;
+    font-size: 1.5em;
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+
+.action-button:hover {
+    background-color: #45a049;
+}
+
+.difficulty-group {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px;
+    border: 1px solid #555;
+    border-radius: 5px;
+}
+
+#difficulty-select {
+    padding: 8px;
+    border-radius: 3px;
+    background-color: #333;
+    color: white;
+    border: 1px solid #777;
+}
+
+/* Utility class to hide the screen */
+.hidden {
+    opacity: 0;
+    pointer-events: none; /* Prevents interaction when hidden */
+}
+
+.difficulty-group {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 10px;
+    border: 1px solid #555;
+    border-radius: 5px;
+    text-align: center;
+}
+
+.difficulty-buttons {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.difficulty-btn {
+    flex: 1;
+    padding: 10px;
+    background-color: #333;
+    color: white;
+    border: 1px solid #777;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.2s, transform 0.1s;
+}
+
+.difficulty-btn:hover {
+    background-color: #444;
+}
+
+.difficulty-btn.active {
+    background-color: #4CAF50;
+    border-color: #4CAF50;
+}
