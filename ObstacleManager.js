@@ -1,214 +1,320 @@
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 import { GLTFLoader } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/GLTFLoader.js';
 import { OBB } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/math/OBB.js';
+import { FontLoader } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/FontLoader.js';
+import { TextGeometry } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/geometries/TextGeometry.js';
 import {
     LANES,
     GROUND_Y,
     CEILING_Y,
 } from './constants.js';
-// 1. IMPORT THE NEW ROCKET MANAGER
 import RocketManager from './RocketManager.js'; 
 
 const ROOM_HEIGHT = CEILING_Y - GROUND_Y;
 const OBSTACLE_DEPTH = 1;
-const THREE_LANE_WIDTH = 6;
-// New constant for cylinder radius
+const THREE_LANE_WIDTH = 10;
 const CYLINDER_RADIUS = 0.5; 
 
-// New: Define models/textures for each type using the switch name 'prototype'
-// const prototype = true; // <<< DELETE THIS HARDCODED GLOBAL VARIABLE
+const CONCRETE_TEXTURE_PATH = './Textures/concrete.jpg';
 
-// Define unique assets for each obstacle type (using 0-8 for now, 9 is RocketManager)
-// NOTE: The asset paths now rely on the local 'prototype' variable (which will be `this.prototype` after class init)
-let PROTOTYPE_FLAG = true; // Temporary flag for asset path definition only
+const DANGER_TEXTURE_PATH = './Textures/yellowpaint.jpg';
 
-const UNIQUE_MODELS = {
-    // Basic Cubes
-    0: { model: PROTOTYPE_FLAG ? null : 'path/to/low_three_lane.gltf', texture: null }, // spawnLowThreeLane
-    1: { model: PROTOTYPE_FLAG ? null : 'path/to/high_three_lane.gltf', texture: null }, // spawnHighThreeLane
-    3: { model: PROTOTYPE_FLAG ? null : 'path/to/gap_obstacle.gltf', texture: null }, // spawnGapObstacle
-    6: { model: PROTOTYPE_FLAG ? null : 'path/to/middle_horizontal.gltf', texture: null }, // spawnMiddleHorizontal
-    8: { model: PROTOTYPE_FLAG ? null : 'path/to/ground_three_fifths.gltf', texture: null }, // spawnGroundThreeFifths
+const LaserShader = {
+    uniforms: {
+        time: { value: 0 },
+        color: { value: new THREE.Color(0xff0000) }
+    },
+    vertexShader: `
+        varying vec2 vUv;
+        void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    `,
+    fragmentShader: `
+        uniform float time;
+        uniform vec3 color;
+        varying vec2 vUv;
 
-    // Vertical Cylinders (Lane Blockers)
-    2: { model: null, texture: PROTOTYPE_FLAG ? null : 'path/to/lane_blocker_texture.png' }, // spawnLaneBlockers
+        void main() {
+            float pulse = 0.85 + 0.15 * sin(time * 5.0);
 
-    // Diagonal/Rotating Cylinders
-    4: { model: null, texture: PROTOTYPE_FLAG ? null : 'path/to/diagonal_texture.png' }, // spawnDiagonalLeftToRight
-    5: { model: null, texture: PROTOTYPE_FLAG ? null : 'path/to/diagonal_texture.png', materialColor: 0x00FF00 }, // spawnDiagonalRightToLeft (Added a unique color hint)
-    7: { model: null, texture: PROTOTYPE_FLAG ? null : 'path/to/rotating_texture.png' }, // spawnRotatingObstacle
+            // Distance from center of cylinder UV
+            float dist = abs(vUv.x - 0.5) * 2.0;
+
+            // SOLID CORE
+            float core = smoothstep(0.25, 0.0, dist);
+
+            // SOFT OUTER GLOW
+            float glow = pow(1.0 - dist, 3.0);
+
+            float intensity = core + glow * 0.6;
+
+            vec3 finalColor = color * intensity * pulse;
+
+            // Keep alpha strong
+            float alpha = clamp(intensity * pulse, 0.6, 1.0);
+
+            gl_FragColor = vec4(finalColor, alpha);
+        }
+    `
 };
 
 export default class ObstacleManager {
-    // 2. Add variable for RocketManager
     rocketManager; 
     loader;
     textureLoader;
     
-    // Store loaded assets
     loadedModels = {};
     loadedTextures = {};
-    
-    // 🚀 NEW: Store the prototype mode state
-    prototype = true; 
-    
-    // 🚀 MODIFIED: Constructor now accepts the prototype mode flag
+    uniqueModelsConfig = {}; 
+
     constructor(scene, prototype) {
         this.scene = scene;
         this.obstacles = [];
         this.spawnTimer = 0;
         this.spawnInterval = 1.5;
         this.spawnZ = -60;
-        this.prototype = prototype; // 🚀 STORE THE MODE
+        this.prototype = prototype; 
+
+        this.laserMaterial = new THREE.ShaderMaterial({
+            uniforms: THREE.UniformsUtils.clone(LaserShader.uniforms),
+            vertexShader: LaserShader.vertexShader,
+            fragmentShader: LaserShader.fragmentShader,
+            transparent: true,
+            side: THREE.DoubleSide,
+            blending: THREE.AdditiveBlending
+        });
         
-        // Repetition control
         this.lastObstacleType = null;
         this.repeatCount = 0;
 
-        // Base material for non-prototype collision meshes
-        // The material is created once, but its wireframe property depends on this.prototype
-        this.material = new THREE.MeshStandardMaterial({ 
-            color: 0xaa0000, 
-            wireframe: this.prototype // 🚀 Use instance prototype flag
-        });
-        
-        // Loader initialization
+        // Initialize loaders
         this.loader = new GLTFLoader();
         this.textureLoader = new THREE.TextureLoader();
 
-        // Create the reusable geometries
+        // Setup the specific asset config based on the passed 'prototype' flag
+        this.setupAssetConfig();
+
+        // Base material for collision meshes (wireframe if prototype)
+        this.material = new THREE.MeshStandardMaterial({ 
+            color: 0xaa0000, 
+            wireframe: this.prototype 
+        });
+
+        // Reusable geometries
         this.verticalCylinderGeometry = new THREE.CylinderGeometry(CYLINDER_RADIUS, CYLINDER_RADIUS, ROOM_HEIGHT, 32);
         this.rotatingCylinderBaseGeometry = new THREE.CylinderGeometry(CYLINDER_RADIUS, CYLINDER_RADIUS, 1, 32);
         
-        // NEW: Load all unique assets at startup
+        this.fontLoader = new FontLoader();
+        this.font = null;
+        this.fontLoader.load('https://cdn.jsdelivr.net/npm/three@0.160.0/examples/fonts/droid/droid_sans_mono_regular.typeface.json', (font) => {
+            this.font = font;
+        });
+
+        // Start asset loading
         this.loadAssets();
 
-        // 3. Instantiate RocketManager and PASS THE PROTOTYPE FLAG
+        // Instantiate RocketManager
         this.rocketManager = new RocketManager(scene, this.spawnZ, this.prototype); 
     }
-    
-    // ======================================================
-    // NEW: Asset Loading Logic
-    // ======================================================
-    loadAssets() {
-        // NOTE: The `UNIQUE_MODELS` paths are set based on a static check, 
-        // so we need to manually check `this.prototype` here for the load logic.
-        console.log(`ObstacleManager Prototype Mode is: ${this.prototype}. Loading assets...`);
-        
-        for (const type in UNIQUE_MODELS) {
-            
-            // Only load assets if NOT in prototype mode
-            if (this.prototype) continue; 
-            
-            const asset = UNIQUE_MODELS[type];
 
-            // Load Model
+    /**
+     * Defines which textures/models to use.
+     * If this.prototype is true, these paths are nullified to prevent loading.
+     */
+    setupAssetConfig() {
+        const getAsset = (path) => this.prototype ? null : path;
+
+        this.uniqueModelsConfig = {
+            // Basic Cubes - Set to use concrete.jpg
+            0: { model: null, texture: CONCRETE_TEXTURE_PATH }, // spawnLowThreeLane
+            1: { model: null, texture: CONCRETE_TEXTURE_PATH }, // spawnHighThreeLane
+            3: { model: null, texture: CONCRETE_TEXTURE_PATH }, // spawnGapObstacle
+            6: { model: null, texture: CONCRETE_TEXTURE_PATH }, // spawnMiddleHorizontal
+            8: { model: null, texture: CONCRETE_TEXTURE_PATH }, // spawnGroundThreeFifths
+            // Cylinders / Lane Blockers
+            2: { model: null, texture: getAsset('path/to/lane_blocker_texture.png') }, 
+            4: { model: null, texture: getAsset('path/to/diagonal_texture.png') }, 
+            5: { model: null, texture: getAsset('path/to/diagonal_texture.png')}, 
+            7: { model: null, texture: getAsset('path/to/rotating_texture.png') }, 
+        };
+
+        this.dangerAsset = { texture: getAsset(DANGER_TEXTURE_PATH) };
+    }
+
+    loadAssets() {
+        if (this.prototype) {
+            //console.log("ObstacleManager: Prototype Mode Active. No textures/models will be loaded.");
+            return;
+        }
+
+        this.textureLoader.load(DANGER_TEXTURE_PATH, (texture) => {
+            // This makes the texture repeat instead of stretching one huge image across the block
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.wrapT = THREE.RepeatWrapping;
+            texture.repeat.set(2, 1); // Adjust these numbers until the paint looks "tight" and detailed
+
+            this.dangerMaterial = new THREE.MeshStandardMaterial({
+                map: texture,
+                transparent: true,
+                side: THREE.FrontSide,
+                depthWrite: true, // Set to true if using 3D text to avoid transparency bugs
+            });
+        });
+
+        for (const type in this.uniqueModelsConfig) {
+            const asset = this.uniqueModelsConfig[type];
+
+            // Load GLTF Models
             if (asset.model) {
-                this.loader.load(
-                    asset.model,
-                    (gltf) => {
-                        this.loadedModels[type] = gltf.scene; 
-                        console.log(`Loaded Model for type ${type}: ${asset.model}`);
-                    },
-                    undefined,
-                    (error) => {
-                        console.error(`Error loading model for type ${type}:`, error);
-                    }
-                );
+                this.loader.load(asset.model, (gltf) => {
+                    this.loadedModels[type] = gltf.scene; 
+                });
             }
 
-            // Load Texture (and create a material from it)
+            // Load Textures
             if (asset.texture) {
-                this.textureLoader.load(
-                    asset.texture,
-                    (texture) => {
-                        // Use a basic color if specified, otherwise default to white light reflection
-                        const color = asset.materialColor || 0xffffff; 
-                        this.loadedTextures[type] = new THREE.MeshStandardMaterial({ map: texture, color: color });
-                        console.log(`Loaded Texture for type ${type}: ${asset.texture}`);
-                    },
-                    undefined,
-                    (error) => {
-                        console.error(`Error loading texture for type ${type}:`, error);
-                    }
-                );
+                this.textureLoader.load(asset.texture, (texture) => {
+                    // Enable tiling so the concrete doesn't stretch
+                    texture.wrapS = THREE.RepeatWrapping;
+                    texture.wrapT = THREE.RepeatWrapping;
+                    
+                    const color = asset.materialColor || 0xffffff; 
+                    this.loadedTextures[type] = new THREE.MeshStandardMaterial({ 
+                        map: texture, 
+                        color: color 
+                    });
+                    //console.log(`Loaded Texture for type ${type}: ${asset.texture}`);
+                });
             }
         }
     }
 
-    // ======================================================
-    // NEW: Obstacle Mesh Creator (handles conditional visuals)
-    // ======================================================
     createObstacleGroup(baseMesh, obstacleType) {
         const group = new THREE.Group();
         group.add(baseMesh);
 
-        const modelInfo = UNIQUE_MODELS[obstacleType];
-
-        // -------------------------
-        // PROTOTYPE MODE
-        // -------------------------
+        // 1. PROTOTYPE MODE: Exit early with basic wireframe
         if (this.prototype) {
-            // Collision mesh IS the visual (wireframe)
             baseMesh.visible = true;
             return group;
         }
 
-        // -------------------------
-        // FULL VISUAL MODE
-        // -------------------------
-        baseMesh.visible = false; // hide collision mesh by default
+        const modelInfo = this.uniqueModelsConfig[obstacleType];
+        const isCylinderType = [2, 4, 5, 7].includes(Number(obstacleType));
 
-        // A. GLTF MODEL
+        // 2. LASER SHADER: Apply to Cylinders
+        if (isCylinderType) {
+            const laserMesh = baseMesh.clone();
+            const material = this.laserMaterial.clone();
+            
+            if (modelInfo?.materialColor) {
+                material.uniforms.color.value.set(modelInfo.materialColor);
+            } else {
+                material.uniforms.color.value.set(0xff0000);
+            }
+
+            laserMesh.material = material;
+            laserMesh.position.set(0, 0, 0);
+            laserMesh.rotation.set(0, 0, 0);
+            laserMesh.scale.set(1.2, 1, 1.2); 
+            
+            group.add(laserMesh);
+            baseMesh.visible = false;
+            return group;
+        }
+
+        // 3. GLTF MODEL
         if (modelInfo?.model && this.loadedModels[obstacleType]) {
             const modelClone = this.loadedModels[obstacleType].clone();
             group.add(modelClone);
-            group.userData.visualMesh = modelClone;
+            baseMesh.visible = false;
             return group;
         }
 
-        // B. TEXTURED GEOMETRY
+        // 4. TEXTURED MESH + 3D "DANGER" TEXT
         if (modelInfo?.texture && this.loadedTextures[obstacleType]) {
             const texturedMesh = baseMesh.clone();
             texturedMesh.material = this.loadedTextures[obstacleType];
-            texturedMesh.visible = true;
 
+            texturedMesh.position.set(0, 0, 0);
+            texturedMesh.rotation.set(0, 0, 0);
+            texturedMesh.scale.set(1, 1, 1);
+            texturedMesh.visible = true;
             group.add(texturedMesh);
-            group.userData.visualMesh = texturedMesh;
+
+            // Add 3D Text to specific wide obstacle types
+            const threeLaneTypes = [0, 1, 3, 6, 8];
+            if (threeLaneTypes.includes(Number(obstacleType)) && this.font) {
+                // If we haven't created the master text mesh yet, create it
+                if (!this.masterDangerMesh) {
+                    this.masterDangerMesh = this.createDangerText();
+                }
+
+                if (this.masterDangerMesh) {
+                    const textLabel = this.masterDangerMesh.clone();
+                    
+                    // Position: Center of front face
+                    // Z is OBSTACLE_DEPTH / 2 + a small offset to prevent clipping
+                    textLabel.position.set(0, 0, (OBSTACLE_DEPTH / 2) + 0.02);
+                    group.add(textLabel);
+                }
+            }
+
+            baseMesh.visible = false;
             return group;
         }
 
-        // -------------------------
-        // 🔥 FALLBACK: SOLID GEOMETRY
-        // -------------------------
+        // 5. FALLBACK
         const fallbackMesh = new THREE.Mesh(
-            baseMesh.geometry, // SAME geometry
-            new THREE.MeshStandardMaterial({
-                color: modelInfo?.materialColor ?? 0xaa0000
-            })
+            baseMesh.geometry,
+            new THREE.MeshStandardMaterial({ color: modelInfo?.materialColor ?? 0xaa0000 })
         );
-        fallbackMesh.position.set(0, 0, 0);
-        fallbackMesh.rotation.set(0, 0, 0);
-        fallbackMesh.scale.set(1, 1, 1);
-        fallbackMesh.visible = true;
-
         group.add(fallbackMesh);
-        group.userData.visualMesh = fallbackMesh;
+        baseMesh.visible = false;
 
         return group;
     }
 
-    // ======================================================
-    // Utility for Box Geometry Obstacles
-    // ======================================================
+    // Helper method to generate the 3D Text Geometry
+    createDangerText() {
+        if (!this.font) return null;
+
+        const textGeo = new TextGeometry('DANGER', {
+            font: this.font,
+            size: 0.5,
+            height: 0.05,
+            curveSegments: 2,
+            bevelEnabled: true,
+            bevelThickness: 0.01,
+            bevelSize: 0.01,
+        });
+
+        textGeo.computeBoundingBox();
+        const xOffset = -0.5 * (textGeo.boundingBox.max.x - textGeo.boundingBox.min.x);
+        const yOffset = -0.5 * (textGeo.boundingBox.max.y - textGeo.boundingBox.min.y);
+        textGeo.translate(xOffset, yOffset, 0);
+
+        // BRIGHT INDUSTRIAL MATERIAL
+        const brightMat = new THREE.MeshStandardMaterial({
+            map: this.dangerMaterial.map, // Keep your yellow paint texture
+            color: 0xffcc00,              // Base yellow color
+            emissive: 0xffaa00,           // The "Glow" color (Orange-Yellow)
+            emissiveIntensity: 1,       // Overdrive the brightness (1.0 is normal, 2.0+ is very bright)
+            metalness: 0.0,               // Non-metal materials usually look brighter/flatter
+            roughness: 0.3                // Makes it slightly shiny
+        });
+
+        const mesh = new THREE.Mesh(textGeo, brightMat);
+        return mesh;
+    }
+
     spawnObstacleMesh(width, height, x, y, obstacleType) {
-        // The collision mesh uses a BoxGeometry
         const geometry = new THREE.BoxGeometry(width, height, OBSTACLE_DEPTH);
-        // Uses this.material, which respects this.prototype for wireframe setting
         const collisionMesh = new THREE.Mesh(geometry, this.material); 
         collisionMesh.position.set(x, y, this.spawnZ);
         
-        // Create the group and add collision/visual meshes
         const group = this.createObstacleGroup(collisionMesh, obstacleType);
         group.position.copy(collisionMesh.position); 
         collisionMesh.position.set(0, 0, 0); 
@@ -218,17 +324,11 @@ export default class ObstacleManager {
         return collisionMesh; 
     }
 
-    // ======================================================
-    // Utility for Cylinder Geometry Obstacles
-    // ======================================================
     spawnCylinderMesh(geometry, x, y, rotation, obstacleType) {
-        // The collision mesh uses a CylinderGeometry
-        // Uses this.material, which respects this.prototype for wireframe setting
         const collisionMesh = new THREE.Mesh(geometry, this.material); 
         collisionMesh.position.set(x, y, this.spawnZ);
         if (rotation) collisionMesh.rotation.z = rotation;
         
-        // Create the group and add collision/visual meshes
         const group = this.createObstacleGroup(collisionMesh, obstacleType);
         group.position.copy(collisionMesh.position); 
         collisionMesh.position.set(0, 0, 0); 
@@ -240,14 +340,18 @@ export default class ObstacleManager {
         return group; 
     }
 
-    // ======================================================
-    // Update Logic 
-    // ======================================================
     update(delta, player, gameSpeed, score) { 
         let collided = false;
         this.spawnTimer += delta;
 
-        // RocketManager update logic remains the same
+        this.obstacles.forEach(group => {
+            group.children.forEach(child => {
+                if (child.material && child.material.uniforms && child.material.uniforms.time) {
+                    child.material.uniforms.time.value += delta;
+                }
+            });
+        });
+
         if (this.rocketManager.update(delta, player, gameSpeed)) {
             collided = true;
         }
@@ -261,19 +365,16 @@ export default class ObstacleManager {
             const obsGroup = this.obstacles[i]; 
             obsGroup.position.z += gameSpeed * delta;
 
-            // Handle rotating/scaling logic (applied to the group)
             if (obsGroup.userData.isRotating) {
                 obsGroup.rotation.z += obsGroup.userData.rotationSpeed * delta; 
             }
 
-            // Cleanup
             if (obsGroup.position.z > 10) {
                 this.scene.remove(obsGroup);
                 this.obstacles.splice(i, 1);
                 continue;
             }
 
-            // Collision Detection
             if (this.checkCollision(player.mesh, obsGroup)) { 
                 collided = true;
             }
@@ -281,10 +382,6 @@ export default class ObstacleManager {
         return collided;
     }
 
-
-    /* ======================================================
-        MASTER SPAWN (Type passing unchanged)
-    ====================================================== */
     spawnObstacle(score) {
         const spawnLaneOverlay = Math.random() < 0.5;
         const type = this.getNextObstacleType(score); 
@@ -303,14 +400,9 @@ export default class ObstacleManager {
         }
 
         if (spawnLaneOverlay && type !== 2 && type !== 7 && type !== 8 && type !== 9) {
-            this.spawnLaneBlockers(true, 2); // Type 2 is always Lane Blockers
+            this.spawnLaneBlockers(true, 2);
         }
     }
-
-
-    /* ======================================================
-        REFIT: EXISTING OBSTACLES (Now passing the type to the spawners)
-    ====================================================== */
 
     spawnLowThreeLane(type) {
         const h = ROOM_HEIGHT / 3;
@@ -323,20 +415,11 @@ export default class ObstacleManager {
     }
 
     spawnLaneBlockers(overlayOnly = false, type) {
-        const lanes = overlayOnly
-            ? [Math.floor(Math.random() * LANES.length)]
-            : this.pickLaneSet();
-
+        const lanes = overlayOnly ? [Math.floor(Math.random() * LANES.length)] : this.pickLaneSet();
         for (const i of lanes) {
-            const x = LANES[i];
-            const y = GROUND_Y + ROOM_HEIGHT / 2;
-            
-            // spawnCylinderMesh now handles the creation of the THREE.Group
-            this.spawnCylinderMesh(this.verticalCylinderGeometry, x, y, null, type);
+            this.spawnCylinderMesh(this.verticalCylinderGeometry, LANES[i], GROUND_Y + ROOM_HEIGHT / 2, null, type);
         }
     }
-
-    // ... (pickLaneSet remains unchanged) ...
 
     pickLaneSet() {
         if (Math.random() < 0.5) return [Math.floor(Math.random() * 3)];
@@ -351,128 +434,68 @@ export default class ObstacleManager {
         this.spawnObstacleMesh(THREE_LANE_WIDTH, h, 0, CEILING_Y - h / 2, type);
     }
 
-    /* ======================================================
-        REFIT: DIAGONAL & ROTATING OBSTACLES (Now Cylinders)
-    ====================================================== */
     spawnDiagonalLeftToRight(type) { this.spawnDiagonal(-2, 2, type); }
     spawnDiagonalRightToLeft(type) { this.spawnDiagonal(2, -2, type); }
 
     spawnDiagonal(xStart, xEnd, type) {
-        const length = Math.sqrt(Math.pow(xEnd - xStart, 2) + Math.pow(ROOM_HEIGHT, 2));
-        const midY = GROUND_Y + ROOM_HEIGHT / 2;
-        const midX = (xStart + xEnd) / 2;
-        
-        // Clone the base geometry, scale it, and calculate rotation *before* passing it to spawnCylinderMesh
+        const length = Math.sqrt(Math.pow(xEnd - xStart, 2) + Math.pow(ROOM_HEIGHT, 2))*1.5;
         const geometry = this.rotatingCylinderBaseGeometry.clone();
         geometry.scale(1, length, 1);
-        
-        // Pre-calculate rotation
         const rotation = Math.atan2(ROOM_HEIGHT, xEnd - xStart)*2; 
-        
-        // spawnCylinderMesh handles the creation of the collision mesh and group
-        this.spawnCylinderMesh(geometry, midX, midY, rotation, type); 
+        this.spawnCylinderMesh(geometry, (xStart + xEnd) / 2, GROUND_Y + ROOM_HEIGHT / 2, rotation, type); 
     }
 
     spawnRotatingObstacle(type) {
-        const maxLength = Math.sqrt(
-            THREE_LANE_WIDTH * THREE_LANE_WIDTH +
-            ROOM_HEIGHT * ROOM_HEIGHT
-        );
-
-        const midY = GROUND_Y + ROOM_HEIGHT / 2;
-        
-        // Clone the base geometry and scale it *before* passing it to spawnCylinderMesh
+        const maxLength = Math.sqrt(THREE_LANE_WIDTH**2 + ROOM_HEIGHT**2);
         const geometry = this.rotatingCylinderBaseGeometry.clone();
         geometry.scale(1, maxLength, 1);
-        
-        // Start rotation at 90 degrees for horizontal orientation
-        const group = this.spawnCylinderMesh(geometry, 0, midY, Math.PI / 2, type); 
-
+        const group = this.spawnCylinderMesh(geometry, 0, GROUND_Y + ROOM_HEIGHT / 2, Math.PI / 2, type); 
         group.userData.isRotating = true;
-
-        group.userData.rotationSpeed =
-            (Math.random() > 0.5 ? 1 : -1) *
-            (0.4 + Math.random() * 0.3); 
+        group.userData.rotationSpeed = (Math.random() > 0.5 ? 1 : -1) * (0.4 + Math.random() * 0.3); 
     }
 
     spawnMiddleHorizontal(type) { 
         const h = ROOM_HEIGHT / 3; 
-        const y = GROUND_Y + ROOM_HEIGHT / 3 + h / 2; 
-        this.spawnObstacleMesh(THREE_LANE_WIDTH, h, 0, y, type); 
+        this.spawnObstacleMesh(THREE_LANE_WIDTH, h, 0, GROUND_Y + ROOM_HEIGHT / 3 + h / 2, type); 
     }
 
     spawnGroundThreeFifths(type) {
         const h = ROOM_HEIGHT * (3 / 5);
-        const y = GROUND_Y + h / 2;
-
-        this.spawnObstacleMesh(
-            THREE_LANE_WIDTH, // full width
-            h,                // 3/5 height
-            0,                // centered in lanes
-            y,
-            type
-        );
+        this.spawnObstacleMesh(THREE_LANE_WIDTH, h, 0, GROUND_Y + h / 2, type);
     }
 
-    // ... (spawnRocketManager remains unchanged) ...
-
     spawnRocketManager() {
-        console.log('Rocket Manager Obstacle Spawned');
         this.rocketManager.spawnRockets();
     }
 
-    /* ======================================================
-        Utility
-    ====================================================== */
-
-    // Modified collision detection to find the *collision mesh* within the *group*
     checkCollision(playerMesh, obstacleGroup) {
-        // The collision mesh is always the first child of the group
         const collisionMesh = obstacleGroup.children[0]; 
-
-        if (!collisionMesh) return false; // Safety check
+        if (!collisionMesh) return false;
 
         playerMesh.updateMatrixWorld(true);
-        // We update the group's matrix world, which updates the child's matrix world
         obstacleGroup.updateMatrixWorld(true); 
 
-        // Collision Detection logic uses the collisionMesh
-        
-        // Use OBB for accurate collision detection, which works even for rotated/scaled meshes
         if (!playerMesh.geometry.boundingBox) playerMesh.geometry.computeBoundingBox();
-        const playerOBB = new OBB().fromBox3(playerMesh.geometry.boundingBox);
-        playerOBB.applyMatrix4(playerMesh.matrixWorld);
+        const playerOBB = new OBB().fromBox3(playerMesh.geometry.boundingBox).applyMatrix4(playerMesh.matrixWorld);
 
         if (!collisionMesh.geometry.boundingBox) collisionMesh.geometry.computeBoundingBox();
-        const obstacleOBB = new OBB().fromBox3(collisionMesh.geometry.boundingBox);
-        // Use the collisionMesh's matrixWorld, which accounts for group position/rotation
-        obstacleOBB.applyMatrix4(collisionMesh.matrixWorld); 
+        const obstacleOBB = new OBB().fromBox3(collisionMesh.geometry.boundingBox).applyMatrix4(collisionMesh.matrixWorld); 
 
         return playerOBB.intersectsOBB(obstacleOBB);
     }
 
-    // ... (reset remains unchanged) ...
-
     reset(){
-        this.obstacles.forEach(obs => {
-            this.scene.remove(obs);
-        });
+        this.obstacles.forEach(obs => this.scene.remove(obs));
         this.obstacles = [];
         this.rocketManager.reset(); 
     }
-    
-    // ... (getNextObstacleType remains unchanged) ...
+
     getNextObstacleType(score) {
-        // Total types is now 10 (0 to 9)
         const totalTypes = 10; 
         let type = Math.floor(Math.random() * totalTypes);
-        //type = 9;
-        
-        // Conditional spawning for Rocket Manager (type 9)
-        // If score is less than 750 AND the random type is 9, re-roll until a valid type is chosen.
         if (score < 750 && type === 9) { 
             do {
-                type = Math.floor(Math.random() * (totalTypes - 1)); // Exclude type 9
+                type = Math.floor(Math.random() * (totalTypes - 1));
             } while (type === this.lastObstacleType);
         }
 
@@ -480,7 +503,6 @@ export default class ObstacleManager {
             this.repeatCount++;
             if (this.repeatCount >= 2) {
                 do {
-                    // Check if score is high enough to include the rocket manager (type 9)
                     let maxType = (score >= 750) ? totalTypes : totalTypes - 1; 
                     type = Math.floor(Math.random() * maxType);
                 } while (type === this.lastObstacleType);

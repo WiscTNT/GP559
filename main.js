@@ -21,7 +21,7 @@ let selectedDifficulty = 'medium';
 let difficultyMultiplier = 1;
 let BASE_SPEED;
 const MAX_SPEED = 80;
-const ACCELERATION = 0.002;
+let ACCELERATION = 0.002;
 let highScore = 0;
 
 let gameState = 'MENU'; // MENU | TRANSITION | RUNNING | GAME_END | POST_COLLISION_PAUSE
@@ -72,7 +72,7 @@ function init() {
     isFullMode = modeToggle.checked;
     modeToggle.addEventListener('change', (event) => {
         isFullMode = event.target.checked;
-        console.log(`Switched to: ${isFullMode ? 'Full Mode' : 'Prototype Mode'}`);
+        //console.log(`Switched to: ${isFullMode ? 'Full Mode' : 'Prototype Mode'}`);
         resetGameObjects(isFullMode);
     });
 
@@ -121,19 +121,27 @@ function init() {
 }
 
 function resetGameObjects(isFullMode) {
+    // 1. Cleanup old World (Remove meshes/lights from scene)
+    if (world && typeof world.destroy === 'function') {
+        world.destroy();
+    }
+
+    // 2. Cleanup Obstacles and Player
     if (obstacles) obstacles.reset?.();
     if (player && player.mesh) scene.remove(player.mesh);
 
-    world = new World(scene, isFullMode);
+    // 3. Re-instantiate with the new mode
+    // Note: If your World class uses 'prototype' as the second arg, 
+    // pass !isFullMode (or however your logic defines prototype).
+    world = new World(scene, !isFullMode); 
     player = new Player(scene, isFullMode);
     obstacles = new ObstacleManager(scene, isFullMode);
 
     player.mesh.position.set(0, 2, 0);
 
-    // Keep player visible for menu / game end
+    // Visibility logic
     if (gameState === 'MENU' || gameState === 'GAME_END') {
         player.mesh.visible = true;
-        if (!player.visual) player.mesh.material.wireframe = true; // placeholder
     } else {
         player.mesh.visible = true;
     }
@@ -151,6 +159,12 @@ function startGame() {
         case 'hard': difficultyMultiplier = 1.75; break;
     }
 
+    switch (selectedDifficulty) {
+        case 'easy': ACCELERATION = 0.002; break;
+        case 'medium': ACCELERATION = 0.003; break;
+        case 'hard': ACCELERATION = 0.005; break;
+    }
+
     player.mesh.position.set(0, 2, 0);
     player.mesh.visible = true;
 
@@ -166,6 +180,15 @@ function startGame() {
 
 function animate() {
     requestAnimationFrame(animate);
+    
+    // --- LOADING CHECK ---
+    // If the player object or its 3D mesh haven't loaded yet, stop here.
+    if (!player || !player.mesh) {
+        //console.log("Waiting for player model...");
+        return; 
+    }
+    // ---------------------
+
     const delta = clock.getDelta();
 
     switch (gameState) {
@@ -192,7 +215,7 @@ function animate() {
             break;
 
         case 'GAME_END':
-            updateMenuCamera(delta); // pass delta for smooth fall
+            updateMenuCamera(delta);
             break;
 
         case 'TRANSITION':
@@ -200,6 +223,11 @@ function animate() {
             break;
 
         case 'MENU':
+            // Ensure player is at start position once loaded
+            if (player.mesh.position.y !== 2 && gameState === 'MENU') {
+                 player.mesh.position.set(0, 2, 0);
+                 player.mesh.visible = true;
+            }
             updateMenuCamera(delta);
             break;
     }
@@ -237,7 +265,7 @@ function updateMenuCamera(delta) {
         if (player.mesh.position.y <= 2) {
             player.mesh.position.y = 2;
             gameState = 'MENU';
-            console.log('Returned to MENU');
+            //console.log('Returned to MENU');
 
             const startScreen = document.getElementById('start-screen');
             if (startScreen) startScreen.classList.remove('hidden');
@@ -288,7 +316,7 @@ function endGame() {
     player.mesh.visible = false;
     pauseStartTime = clock.getElapsedTime();
 
-    console.log('GAME OVER - Paused on collision screen');
+    //console.log('GAME OVER - Paused on collision screen');
 }
 
 function transitionToMenu() {
@@ -314,5 +342,5 @@ function transitionToMenu() {
     obstacles.obstacles.forEach(o => scene.remove(o.mesh));
     obstacles.obstacles = [];
 
-    console.log('Transitioning to MENU (Player Falling)');
+    //console.log('Transitioning to MENU (Player Falling)');
 }
