@@ -50,6 +50,16 @@ body { margin: 0; overflow: hidden; }
     text-align: left; /* Kept for explicit alignment, though often the default. */
 }
 
+.sub-id {
+    position: absolute;
+    top: 120px; /* Positioned directly under the main title */
+    left: 80px;
+    font-size: 1.2em;
+    color: #888; /* Slightly dimmed for a "metadata" look */
+    margin: 0;
+    font-family: monospace; /* Looks more like a system ID */
+}
+
 .score-display {
     position: absolute;
     left: 80px;        /* same as title & controls */
